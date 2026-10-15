@@ -1,5 +1,5 @@
 // Magic Wi-Fi: trasmette tante reti Wi-Fi fittizie (beacon) con lo stesso nome, scritto da una pagina web.
-// Collegati dal telefono alla rete di controllo, apri http://192.168.4.1 e scrivi le predizioni.
+// Collegati dal telefono alla rete di controllo, apri http://192.168.1.1 e scrivi le predizioni.
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -72,7 +72,7 @@ function savePw(){
   var p=$('pw').value;
   if(p.length<8||p.length>63){$('pwst').textContent='La password deve avere da 8 a 63 caratteri.';return}
   var b=new URLSearchParams();b.set('p',p);
-  fetch('/pass',{method:'POST',body:b}).then(r=>r.text()).then(x=>{$('pwst').textContent=x;$('pw').value=''}).catch(function(){$('pwst').textContent='Salvata: ricollegati con la nuova password.'});
+  fetch('/pass',{method:'POST',body:b}).then(r=>r.json()).then(j=>{$('pwst').textContent=j.ok?'Password salvata. Ricollegati alla rete ESP32 con la nuova password.':'La password deve avere da 8 a 63 caratteri.';if(j.ok)$('pw').value=''}).catch(function(){$('pwst').textContent='Salvata: ricollegati con la nuova password.'});
 }
 </script>
 <script>
@@ -91,7 +91,7 @@ function upd(){
 function send(on){
   upd();
   var b=new URLSearchParams();b.set('on',on);b.set('t',$('t').value);b.set('n',$('n').value);b.set('s',$('s').checked?1:0);
-  fetch('/set',{method:'POST',body:b}).then(r=>r.text()).then(x=>$('st').textContent=x);
+  fetch('/set',{method:'POST',body:b}).then(r=>r.json()).then(j=>$('st').textContent=j.on?('attivo ('+j.count+' reti)'):'spento');
 }
 fetch('/status').then(r=>r.json()).then(j=>{$('t').value=j.ssid;pref=j.on?j.count:100;$('s').checked=j.on?j.secured:true;upd();$('st').textContent=j.on?('attivo ('+j.count+' reti)'):'spento'});
 upd();
@@ -116,37 +116,45 @@ static String jsonEscape(const String &s)
   return o;
 }
 
-static void handleStatus()
+static String statusJson()
 {
   String j = "{\"on\":";
   j += running ? "true" : "false";
   j += ",\"ssid\":\"" + jsonEscape(ssid) + "\",\"count\":" + netCount + ",\"secured\":" + (secured ? "true" : "false") + "}";
-  server.send(200, "application/json", j);
+  return j;
 }
 
+static void handleStatus() { server.send(200, "application/json", statusJson()); }
+
+// Tutti i campi sono facoltativi: quelli assenti mantengono il valore precedente.
 static void handleSet()
 {
-  running = server.arg("on") == "1";
-  secured = server.arg("s") != "0";
-  String line = server.arg("t");
-  line.replace("\r", "");
-  line.replace("\n", " ");
-  // la pagina limita già testo e numero di reti; qui ripeto gli stessi controlli per sicurezza
-  if ((int)line.length() > MAX_LEN)
+  if (server.hasArg("on"))
+    running = server.arg("on") == "1";
+  if (server.hasArg("s"))
+    secured = server.arg("s") != "0";
+  if (server.hasArg("t"))
   {
-    int cut = MAX_LEN;
-    while (cut > 0 && (((uint8_t)line[cut]) & 0xC0) == 0x80)
-      cut--;
-    line = line.substring(0, cut);
+    String line = server.arg("t");
+    line.replace("\r", "");
+    line.replace("\n", " ");
+    // la pagina limita già testo e numero di reti; qui ripeto gli stessi controlli per sicurezza
+    if ((int)line.length() > MAX_LEN)
+    {
+      int cut = MAX_LEN;
+      while (cut > 0 && (((uint8_t)line[cut]) & 0xC0) == 0x80)
+        cut--;
+      line = line.substring(0, cut);
+    }
+    ssid = line;
   }
-  ssid = line;
 
   // Android raggruppa le reti con lo stesso nome: aggiungo un suffisso invisibile diverso per ogni rete
   // (indice in binario con U+200B / U+200C, 3 byte ciascuno), così sembrano uguali ma sono nomi distinti.
   // I byte rimasti dopo il testo fissano quanti bit, e quindi quante reti, si possono usare.
   int bitsAllowed = (MAX_LEN - (int)ssid.length()) / 3;
   int maxNets = bitsAllowed >= 7 ? MAX_COUNT : (1 << bitsAllowed);
-  int n = server.arg("n").toInt();
+  int n = server.hasArg("n") ? server.arg("n").toInt() : netCount;
   netCount = n < 1 ? 1 : (n > maxNets ? maxNets : n);
   int bits = 0;
   while ((1 << bits) < netCount)
@@ -160,7 +168,7 @@ static void handleSet()
   }
   if (ssid.length() == 0)
     running = false;
-  server.send(200, "text/plain; charset=utf-8", running ? String("attivo (") + netCount + " reti)" : "spento");
+  server.send(200, "application/json", statusJson());
 }
 
 static void handlePass()
@@ -168,13 +176,13 @@ static void handlePass()
   String p = server.arg("p");
   if (p.length() < 8 || p.length() > 63)
   {
-    server.send(400, "text/plain; charset=utf-8", "La password deve avere da 8 a 63 caratteri.");
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"password_length\"}");
     return;
   }
   ctrlPass = p;
   prefs.putString("pass", ctrlPass);
   restartApAt = millis() + 1000; // lascio il tempo di inviare la risposta prima di riavviare la rete
-  server.send(200, "text/plain; charset=utf-8", "Password salvata. Ricollegati alla rete ESP32 con la nuova password.");
+  server.send(200, "application/json", "{\"ok\":true}");
 }
 
 // Invia un beacon con SSID e BSSID derivato dall'indice, così ogni nome è una rete distinta.
