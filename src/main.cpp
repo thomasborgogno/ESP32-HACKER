@@ -9,7 +9,7 @@
 // Rete di controllo nascosta: va aggiunta a mano sul telefono (nome esatto, sicurezza WPA2)
 static const char *CTRL_SSID = "ESP32";
 static const char *DEFAULT_PASS = "00000000"; // password iniziale, modificabile dalla pagina web
-static const bool CTRL_HIDDEN = false;
+static const bool CTRL_HIDDEN = true;
 static const uint8_t CHANNEL = 1;
 
 Preferences prefs;
@@ -31,7 +31,7 @@ WebServer server(80);
 static String ssid;                // nome base scelto dall'utente
 static String variants[MAX_COUNT]; // nome + suffisso invisibile, uno per rete
 static int netCount = 50;
-static bool secured = true;        // true = le reti finte appaiono protette (WPA2, con lucchetto)
+static bool secured = true; // true = le reti finte appaiono protette (WPA2, con lucchetto)
 static bool running = false;
 
 static const char PAGE[] PROGMEM = R"HTML(<!doctype html>
@@ -198,7 +198,7 @@ static void sendBeacon(const String &ssid, int idx)
   for (int i = 0; i < 8; i++)
     pkt[n++] = 0x00; // timestamp
   pkt[n++] = 0x64;
-  pkt[n++] = 0x00; // intervallo beacon 100 TU
+  pkt[n++] = 0x00;                  // intervallo beacon 100 TU
   pkt[n++] = secured ? 0x11 : 0x01; // capability: ESS (+ bit privacy se protetta)
   pkt[n++] = 0x04;
   pkt[n++] = 0x00;
