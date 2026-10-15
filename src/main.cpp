@@ -36,18 +36,32 @@ p{color:#aaa;font-size:.9rem}
 #st{font-weight:bold}
 </style></head><body>
 <h1>Predizione Wi-Fi</h1>
-<p>Scrivi la predizione (max 32 caratteri): verrà trasmessa come tante reti con lo stesso nome.</p>
-<input id="t" type="text" maxlength="32" placeholder="Asso di Cuori" autocomplete="off">
-<p>Numero di reti: <input id="n" type="number" min="1" max="100" value="50"></p>
+<p>Scrivi la predizione: verrà trasmessa come tante reti con lo stesso nome. Più il testo è lungo, meno reti si possono generare.</p>
+<input id="t" type="text" placeholder="Asso di Cuori" autocomplete="off" oninput="upd()">
+<p>Numero di reti: <input id="n" type="number" min="1" max="100" value="100" oninput="pref=Number(this.value)||1;upd()"> <span id="lim"></span></p>
 <button id="go" onclick="send(1)">Invia / Avvia</button>
 <button id="stop" onclick="send(0)">Spegni</button>
 <p>Stato: <span id="st">...</span></p>
 <script>
-function send(on){
-  var b=new URLSearchParams();b.set('on',on);b.set('t',document.getElementById('t').value);b.set('n',document.getElementById('n').value);
-  fetch('/set',{method:'POST',body:b}).then(r=>r.text()).then(x=>document.getElementById('st').textContent=x);
+var pref=100,$=function(i){return document.getElementById(i)};
+function bytes(s){return new TextEncoder().encode(s).length}
+// ogni rete usa un suffisso invisibile di 3 byte per bit: il testo e il suffisso stanno in 32 byte
+function maxNets(L){var b=Math.floor((32-L)/3);return b>=7?100:(1<<b)}
+function upd(){
+  var t=Array.from($('t').value);
+  while(bytes(t.join(''))>32)t.pop();
+  if(t.join('')!==$('t').value)$('t').value=t.join('');
+  var L=bytes(t.join('')),m=maxNets(L),n=$('n');
+  n.max=m;n.value=Math.max(1,Math.min(pref,m));
+  $('lim').textContent='(max '+m+' con questo testo)';
 }
-fetch('/status').then(r=>r.json()).then(j=>{document.getElementById('t').value=j.ssid;document.getElementById('n').value=j.count;document.getElementById('st').textContent=j.on?('attivo ('+j.count+' reti)'):'spento'});
+function send(on){
+  upd();
+  var b=new URLSearchParams();b.set('on',on);b.set('t',$('t').value);b.set('n',$('n').value);
+  fetch('/set',{method:'POST',body:b}).then(r=>r.text()).then(x=>$('st').textContent=x);
+}
+fetch('/status').then(r=>r.json()).then(j=>{$('t').value=j.ssid;pref=j.on?j.count:100;upd();$('st').textContent=j.on?('attivo ('+j.count+' reti)'):'spento'});
+upd();
 </script></body></html>)HTML";
 
 static void handleRoot() { server.send_P(200, "text/html; charset=utf-8", PAGE); }
@@ -74,21 +88,23 @@ static void handleSet() {
   String line = server.arg("t");
   line.replace("\r", "");
   line.replace("\n", " ");
-  int n = server.arg("n").toInt();
-  netCount = n < 1 ? 1 : (n > MAX_COUNT ? MAX_COUNT : n);
-
-  // Android raggruppa le reti con lo stesso nome: aggiungo un suffisso invisibile diverso per ogni rete
-  // (indice in binario con U+200B / U+200C, 3 byte ciascuno), così sembrano uguali ma sono nomi distinti.
-  int bits = 1;
-  while ((1 << bits) < netCount) bits++;
-  int maxBase = MAX_LEN - 3 * bits;
-  // taglia il nome base senza spezzare un carattere UTF-8
-  if ((int)line.length() > maxBase) {
-    int cut = maxBase;
+  // la pagina limita già testo e numero di reti; qui ripeto gli stessi controlli per sicurezza
+  if ((int)line.length() > MAX_LEN) {
+    int cut = MAX_LEN;
     while (cut > 0 && (((uint8_t)line[cut]) & 0xC0) == 0x80) cut--;
     line = line.substring(0, cut);
   }
   ssid = line;
+
+  // Android raggruppa le reti con lo stesso nome: aggiungo un suffisso invisibile diverso per ogni rete
+  // (indice in binario con U+200B / U+200C, 3 byte ciascuno), così sembrano uguali ma sono nomi distinti.
+  // I byte rimasti dopo il testo fissano quanti bit, e quindi quante reti, si possono usare.
+  int bitsAllowed = (MAX_LEN - (int)ssid.length()) / 3;
+  int maxNets = bitsAllowed >= 7 ? MAX_COUNT : (1 << bitsAllowed);
+  int n = server.arg("n").toInt();
+  netCount = n < 1 ? 1 : (n > maxNets ? maxNets : n);
+  int bits = 0;
+  while ((1 << bits) < netCount) bits++;
   for (int i = 0; i < netCount; i++) {
     String v = ssid;
     for (int b = bits - 1; b >= 0; b--) v += ((i >> b) & 1) ? "\xE2\x80\x8C" : "\xE2\x80\x8B";
